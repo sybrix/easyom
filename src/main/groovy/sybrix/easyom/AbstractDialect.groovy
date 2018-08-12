@@ -19,63 +19,6 @@ class AbstractDialect {
         private Boolean useTablePrefix = false
         private String tablePrefix = ""
 
-        class PagingAndSortByOptions extends HashMap<String, Object> {
-                PagingAndSortByOptions(String orderBy) {
-                        this.put("orderBy", orderBy)
-                }
-
-                PagingAndSortByOptions(String orderBy, int page, int pageSize) {
-                        this.put("orderBy", orderBy)
-                        this.put("page", page)
-                        this.put("pageSize", pageSize)
-                }
-
-                PagingAndSortByOptions(String orderBy, int page, int pageSize, String countColumn) {
-                        this.put("orderBy", orderBy)
-                        this.put("page", page)
-                        this.put("pageSize", pageSize)
-                        this.put("countColumn", countColumn)
-                }
-        }
-
-        class WhereClauseParameters extends HashMap<String, Object> {
-                String operator = "AND"
-
-                WhereClauseParameters() {
-                        put("operator", operator)
-                }
-
-                def addParameter(String parameterName, Object value) {
-                        this.put(parameterName, value)
-                }
-
-                void addPage(int page){
-                        this.put("page", page)
-                }
-
-                void addPaging(String orderBy, int page, int pageSize, String countColumn) {
-                        this.put("orderBy", orderBy)
-                        this.put("page", page)
-                        this.put("pageSize", pageSize)
-                        this.put("countColumn", countColumn)
-                }
-
-                String getCountColumn(){
-                        this.get("countColumn")
-                }
-
-                int getPage(){
-                        this.get("page")
-                }
-
-                int getPageSize(){
-                        this.get("pageSize")
-                }
-
-                String getOrderBy(){
-                        this.get("orderBy")
-                }
-        }
 
         class WhereClauseAndValues {
                 String whereClause
@@ -92,7 +35,6 @@ class AbstractDialect {
                 Map<String, String> columnAliasMap = [:]
         }
 
-        //public Object list(String cls, PagingAndSortByOptions optionsMap) {
         String createSelectStatement(Class modelClass, PagingAndSortByOptions optionsMap) {
                 def sql = new StringBuilder()
 
