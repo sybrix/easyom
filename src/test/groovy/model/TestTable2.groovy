@@ -8,7 +8,7 @@ package model;
 public class TestTable2 {
         private def dynamicProperties = []  // dynamicProperties is list of the names of each property changed before a persistence method invocation.
                                             // it ensures than when an update, or insert is called, that only the columns changed are updated.
-        private static primaryKeys = ['pkColumn']
+        private static primaryKey = ['pkColumn']
         //static columns = [testMapColumn:'column1', boolColumn:'boolean_column'] // map of propertyName:columnName
         static tableName = 'tblTestTable'   // the name of the table, when the class name is not a match
 

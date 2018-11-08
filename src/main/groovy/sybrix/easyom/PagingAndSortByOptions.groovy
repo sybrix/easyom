@@ -1,54 +1,53 @@
 package sybrix.easyom
 
+import groovy.transform.CompileStatic
+
+@CompileStatic
 class PagingAndSortByOptions extends HashMap<String, Object> {
-    PagingAndSortByOptions() {
+        String orderBy
+        Integer page
+        Integer pageSize
+        String countColumn = "*"
 
-    }
-    PagingAndSortByOptions(String orderBy) {
-        this.put("orderBy", orderBy)
-    }
+        PagingAndSortByOptions() {
 
-    PagingAndSortByOptions(String orderBy, int page, int pageSize) {
-        this.put("orderBy", orderBy)
-        this.put("page", page)
-        this.put("pageSize", pageSize)
-    }
+        }
 
-    PagingAndSortByOptions(String orderBy, int page, int pageSize, String countColumn) {
-        this.put("orderBy", orderBy)
-        this.put("page", page)
-        this.put("pageSize", pageSize)
-        this.put("countColumn", countColumn)
-    }
+        PagingAndSortByOptions(String orderBy) {
+                this.orderBy = orderBy
+        }
 
-    def addParameter(String parameterName, Object value) {
-        this.put(parameterName, value)
-    }
+        PagingAndSortByOptions(String orderBy, Integer page, Integer pageSize) {
+                this.orderBy = orderBy
+                this.page = page
+                this.pageSize = pageSize
+        }
 
-    void addPage(int page){
-        this.put("page", page)
-    }
+        PagingAndSortByOptions(String orderBy, int page, int pageSize, String countColumn) {
+                this(orderBy, page, pageSize)
+                this.countColumn = countColumn
+        }
 
-    void addPaging(String orderBy, int page, int pageSize, String countColumn) {
-        this.put("orderBy", orderBy)
-        this.put("page", page)
-        this.put("pageSize", pageSize)
-        this.put("countColumn", countColumn)
-    }
+        def addParameter(String parameterName, Object value) {
+                this.put(parameterName, value)
+        }
 
-    String getCountColumn(){
-        this.get("countColumn")
-    }
+        void addPage(int page) {
+                this.put("page", page)
+        }
 
-    int getPage(){
-        this.get("page")
-    }
+        void addPaging(String orderBy, int page, int pageSize, String countColumn) {
+                this.orderBy = orderBy
+                this.page = page
+                this.pageSize = pageSize
+                this.countColumn = countColumn
+        }
 
-    int getPageSize(){
-        this.get("pageSize")
-    }
+        String getOrderBy() {
+                return orderBy
+        }
 
-    String getOrderBy(){
-        this.get("orderBy")
-    }
+        void setOrderBy(String orderBy) {
+                this.orderBy = orderBy
+        }
 }

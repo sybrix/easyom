@@ -1,18 +1,25 @@
 package sybrix.easyom
 
 import groovy.sql.Sql
+import org.apache.derby.jdbc.EmbeddedDataSource
+import sybrix.easyom.dialects.Dialect
 
 import java.beans.BeanInfo
 import java.beans.Introspector
 import java.beans.PropertyDescriptor
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
+import java.sql.Blob
 import java.sql.Connection
+import java.sql.ResultSetMetaData
 import java.util.logging.Logger
+
 import javax.naming.Context
 import javax.sql.DataSource
+
 import org.codehaus.groovy.runtime.GStringImpl
 import org.codehaus.groovy.runtime.metaclass.ThreadManagedMetaBeanProperty
+
 import static java.util.logging.Level.FINE
 
 /**
@@ -32,23 +39,29 @@ import static java.util.logging.Level.FINE
  * */
 
 class EasyOM {
+
         private static final Logger logger = Logger.getLogger(EasyOM.class.getName())
+
+        private Dialect dbDialect
+
 
         private Context envCtx
         private Properties prop
         private DataSource dataSource
         private Boolean dbConnectionTested = false
-        private String databaseDialect
 
         private final ThreadLocal<Sql> sqlThreadLocal = new ThreadLocal<Sql>() {
                 @Override
                 protected Sql initialValue() {
                         return null
                 }
-        };
+        }
 
-        EasyOM(Properties propertiesFile) {
-                initializeDBProperties(propertiesFile)
+        EasyOM(Properties properties) {
+                initializeDBProperties(properties)
+                Class cls = Class.forName(properties.get("db.dialect"))
+                dbDialect = cls.newInstance()
+                dbDialect.init(properties)
         }
 
 //        public void init(Properties propertiesFile, def app) {
@@ -82,7 +95,7 @@ class EasyOM {
                 def db
                 prop = propertiesFile
 
-                if (!dbConnectionTested){
+                if (!dbConnectionTested) {
                         try {
                                 db = newSqlInstance(null)
                                 dbConnectionTested = true
@@ -94,7 +107,6 @@ class EasyOM {
                                         db.close()
                         }
                 }
-
 
                 addStringExecuteQuery()
                 addStringExecuteUpdate()
@@ -166,10 +178,10 @@ class EasyOM {
                         List results = new ArrayList()
 
                         def totalCountQuery
-                        def pagedResults
+                        PagedResults pagedResults
 
                         if (page != null && pageSize != null) {
-                                totalCountQuery = createRecordCountQuery(sql)
+                                totalCountQuery = dbDialect.createRecordCountStringQuery(sql)
                                 pagedResults = doPagedResults(sql, totalCountQuery, page, pageSize, null)
                                 sql = pagedResults.sql
                         }
@@ -200,9 +212,13 @@ class EasyOM {
                                         def row = clazz.newInstance()
                                         for (i in 1..rs.getMetaData().getColumnCount()) {
 
-                                                String colName = columns[rs.getMetaData().getColumnLabel(i).toUpperCase()]
+                                                String propertyName = columns[rs.getMetaData().getColumnLabel(i).toUpperCase()]
+                                                if(propertyName == null){
+                                                        propertyName = columns[camelCase(rs.getMetaData().getColumnLabel(i).toLowerCase()).toUpperCase()]
+                                                }
+                                                String colName = rs.getMetaData().getColumnLabel(i)
                                                 if (colName != null)
-                                                        row."$colName" = getValue(getType(clazz, "$colName"), rs."$colName")
+                                                        row."$propertyName" = dbDialect.getValue(getType(clazz, "$propertyName"), rs."$colName")
                                         }
                                         row.clearDynamicProperties()
                                         results << row
@@ -210,7 +226,7 @@ class EasyOM {
                         }
 
                         if (page != null && pageSize != null) {
-                                pagedResults.results = results
+                                pagedResults.data = results
                                 return pagedResults
                         } else {
                                 return results
@@ -218,6 +234,54 @@ class EasyOM {
                 }
 
                 String.metaClass.executeQuery = { Object[] args ->
+                        String[] values = new String[0]
+                        String[] sql = new String[1]
+                        sql[0] = delegate.toString()
+
+                        GString gs = new GStringImpl(values, sql)
+                        gs.executeQuery(args)
+
+                }
+        }
+
+        public void addStringExecuteQuery1() {
+
+                GString.metaClass.executeQuery = { Map args ->
+                        GString sql = delegate
+                        def values = delegate.values
+                        def clazz
+                        def pageSize
+                        def page
+
+                        if (args.size() == 1 && args[0] instanceof Map) {
+                                clazz = args[0].resultClass
+                                page = args[0].page
+                                pageSize = args[0].pageSize
+
+                        } else if (args.size() == 1 && args[0] instanceof Class) {
+                                clazz = args[0]
+                        }
+
+                        SelectSqlStatement sqlStatement = new SelectSqlStatement(sqlGString: sql, values: values)
+                        sqlStatement.selectColumnsAndAliasMap = dbDialect.createSelectColumnsAndAliasMap(clazz)
+
+                        if (page != null && pageSize != null) {
+                                def totalCountQuery = createRecordCountQuery(sql)
+                                sqlStatement.countStatement = new SqlStatement(sqlGString: new GStringImpl(values.toArray(), totalCountQuery.trim().split('\\?')))
+                        }
+
+                        if (clazz == null) {
+                                def db = getSqlInstance(null)
+                                return db.rows(sqlStatement.sqlGString)
+                        }
+
+                        if (sqlStatement.countStatement)
+                                doPageSelect(pageSize, page, sqlStatement, clazz)
+                        else
+                                doSelect(sqlStatement, clazz)
+                }
+
+                String.metaClass.executeQuery = { Map args ->
                         String[] values = new String[0]
                         String[] sql = new String[1]
                         sql[0] = delegate.toString()
@@ -247,6 +311,7 @@ class EasyOM {
         }
 
         public void addDAOProperties(clazz) {
+
                 clazz.metaClass.dataSource = ''
                 clazz.metaClass.tableName = getTableName(clazz)
         }
@@ -255,9 +320,11 @@ class EasyOM {
                 clazz.metaClass.setProperty = { String name, value ->
                         def metaProperty = clazz.metaClass.getMetaProperty(name)
                         if (metaProperty instanceof ThreadManagedMetaBeanProperty) {
-                                metaProperty.setThreadBoundPropertyValue(delegate, name, value)
+                                metaProperty.setThreadBoundPropertyValue(delegate, name, convert(value))
                         } else {
-                                metaProperty.setProperty(delegate, value)
+
+                                metaProperty.setProperty(delegate, convert(value))
+
                                 if (!delegate.dynamicProperties.contains(name))
                                         delegate.dynamicProperties << name
                                 logger.finest("setProperty $name")
@@ -265,71 +332,30 @@ class EasyOM {
                 }
         }
 
+        def convert(def p) {
+                if (p instanceof java.sql.Blob) {
+                        new sybrix.easyom.Blob(p)
+                } else {
+                        p
+                }
+        }
+
         public void addInsertMethod(clazz) {
                 clazz.metaClass.insert = { Boolean insertUpdatedColumnsOnly ->
-                        def columnName
-                        def values = []
-                        StringBuilder s = new StringBuilder()
 
-                        s.append "INSERT INTO $tableName ("
-                        boolean hasColumnsProperty = isProperty(clazz, 'columns')
-                        def allColumns = getAllColumns(clazz, delegate)
-
-                        def properties = allColumns
-                        if (insertUpdatedColumnsOnly)
-                                properties = delegate.dynamicProperties
-
-                        boolean manualPrimaryKeys
-                        delegate.primaryKeys.each {
-                                if (delegate.dynamicProperties.contains(it)) {
-                                        manualPrimaryKeys = true
-                                } else {
-                                        manualPrimaryKeys = false
-                                }
-                        }
-
-                        if (!manualPrimaryKeys) {
-                                properties.removeAll(delegate.primaryKeys)
-                        }
-
-                        properties.each {
-                                if (hasColumnsProperty && delegate.columns?.containsKey(it)) {
-                                        s << delegate.columns[it]
-                                } else {
-                                        s << unCamelCase(it)
-                                }
-
-                                s << ', '
-                        }
-                        s.replace(s.size() - 2, s.size(), '')
-
-                        s << ') VALUES ('
-
-                        properties.each {
-                                s << '?,'
-                                def val = delegate."$it"
-                                values << getValue(val?.class, val)
-                                /*
-                                if (val == null){
-                                        values << val
-                                } else if (val instanceof java.sql.Timestamp) {
-                                        values << val
-                                } else if (val instanceof java.util.Date || val instanceof java.sql.Date) {
-                                        values << new java.sql.Timestamp(val.time)
-                                } else if (val instanceof java.lang.Boolean || val.class == boolean.class) {
-                                        values << (val == true ? '1'.toCharacter() : '0'.toCharacter())
-                                } else {
-                                        values << val
-                                }
-                                */
-                        }
-                        s.replace(s.size() - 1, s.size(), '')
-                        s << ')'
-
-                        logger.finer s.toString()
+                        SqlStatement sqlStatement = dbDialect.createInsertStatement(delegate, insertUpdatedColumnsOnly)
 
                         def db = getSqlInstance(delegate.dataSource)
-                        db.executeUpdate(new GStringImpl(values.toArray(), s.toString().trim().split('\\?')))
+
+                        for (int i = 0; i < sqlStatement.sqlGString.values.length; i++) {
+                                if (sqlStatement.sqlGString.values[i] instanceof sybrix.easyom.Blob) {
+                                        sqlStatement.sqlGString.values[i] = createBlob(db.dataSource.getConnection(),
+                                                ((sybrix.easyom.Blob) sqlStatement.sqlGString.values[i]).toInputStream())
+                                }
+                        }
+                        def l = db.executeInsert(sqlStatement.sqlGString)
+
+                        l[0][0]
                 }
         }
 
@@ -370,7 +396,7 @@ class EasyOM {
                 clazz.metaClass.save = { Boolean insertUpdatedColumns ->
 
                         boolean hasPrimaryKeyValues = false
-                        clazz.primaryKeys.each {
+                        clazz.primaryKey.each {
                                 def val = delegate?."$it"
                                 if (val != null)
                                         hasPrimaryKeyValues = true
@@ -385,209 +411,86 @@ class EasyOM {
 
         private void addUpdateMethod(clazz) {
                 clazz.metaClass.update = { ->
-                        def values = []
-                        def sql = new StringBuilder()
-                        def columnName
 
-                        boolean hasColumnsProperty = isProperty(clazz, 'columns')
+                        SqlStatement sqlStatement = dbDialect.createUpdateStatement(delegate)
 
-                        sql << "UPDATE $tableName SET "
-
-                        delegate.dynamicProperties.each {
-                                if (hasColumnsProperty && delegate?.columns.containsKey(it))
-                                        columnName = unCamelCaseColumn(delegate?.columns[it])
-                                else
-                                        columnName = unCamelCaseColumn(it)
-
-                                sql << "$columnName = ?, "
-
-                                def _type = getType(clazz, it)
-                                values << getValue(_type, delegate?."$it")
-                        }
-
-                        sql.replace(sql.size() - 2, sql.size(), '')
-
-                        sql << " WHERE "
-
-                        clazz.primaryKeys.each {
-                                columnName = unCamelCaseColumn(it)
-                                sql << "$columnName = ? and "
-                                def val = delegate?."$it"
-                                values << getValue(val?.class, val)
-                        }
-
-                        sql.replace(sql.size() - 6, sql.size(), '')
-
-                        logger.finer sql.toString()
-
-                        def db = getSqlInstance(null)
-                        db.executeUpdate(new GStringImpl(values.toArray(), sql.toString().trim().split('\\?')))
+                        def db = getSqlInstance(delegate.dataSource)
+                        db.executeUpdate(sqlStatement.sqlGString)
                 }
         }
 
-        private void addStaticFindMethod(clazz) {
+        private void addStaticFindMethod(Class clazz) {
 
-                clazz.metaClass.static.find = { whereMap ->
-                        def values = []
-                        def sql = new StringBuilder()
-                        String columnName
-                        def tbl = getTableName(clazz)
-                        def operator = "AND"
+                clazz.metaClass.static.find = { parameters ->
 
-                        if (whereMap.containsKey('operator'))
-                                if (whereMap.operator.toUpperCase() == 'OR' || whereMap.operator.toUpperCase() == 'AND')
-                                        operator = whereMap.remove('operator').toUpperCase()
+                        WhereClauseParameters whereClauseParameters = createParameters(parameters)
 
-                        sql << "SELECT "
-                        Map columns = [:]
-                        boolean hasColumnsProperty = isProperty(clazz, 'columns')
+                        SelectSqlStatement sqlStatement = dbDialect.createSelectStatement(clazz, whereClauseParameters)
 
-                        createSelectList(clazz, hasColumnsProperty, sql, columns, delegate)
+                        def results = doSelect(sqlStatement, clazz)
 
-                        sql.replace(sql.size() - 2, sql.size(), ' ')
-
-                        sql << "FROM $tbl WHERE "
-
-                        whereMap.each {
-                                if (hasColumnsProperty && delegate.columns?.containsKey(it.key)) {
-                                        columnName = delegate.columns[it.key]
-                                } else {
-                                        columnName = unCamelCaseColumn(it.key)
-                                }
-
-                                if (it.value == null) {
-                                        sql << "$columnName IS NULL $operator "
-                                } else {
-                                        sql << "$columnName = ?  $operator "
-                                        values << getValue(it?.value?.class, it.value)
-                                }
-
-//                                sql << "$columnName = ?  $operator "
-//                                values << getValue(it?.value?.class,it?.value)
-                        }
-
-                        sql.replace(sql.size() - 4, sql.size(), '')
-
-                        logger.finer sql.toString()
-
-                        def db = getSqlInstance(null)
-                        List results = new ArrayList()
-
-                        db.eachRow(new GStringImpl(values.toArray(), sql.toString().trim().split('\\?'))) { rs ->
-                                def row = clazz.newInstance()
-                                columns.each { col ->
-                                        row."$col.key" = getSelectValue(getType(clazz, "$col.key"), rs."$col.key")
-                                }
-                                row.clearDynamicProperties()
-                                results << row
-                        }
-
-                        if (results.size() == 0)
+                        if (results?.size() == 0)
                                 return null
 
                         results.get(0)
                 }
         }
 
+
         private void addStaticFindAllMethod(clazz) {
-                clazz.metaClass.static.findAll = { whereMap ->
-                        def values = []
-                        def sql = new StringBuilder()
-                        String columnName
-                        def tbl = getTableName(clazz)
-                        def orderBy
-                        def page
-                        def pageSize
-                        def operator = "AND"
-                        def countQuery
+                clazz.metaClass.static.findAll = { parameters ->
 
-                        if (whereMap.containsKey('operator'))
-                                if (whereMap.operator.toUpperCase() == 'OR' || whereMap.operator.toUpperCase() == 'AND')
-                                        operator = whereMap.remove('operator').toUpperCase()
+                        WhereClauseParameters whereClauseParameters = createParameters(parameters)
 
-                        if (whereMap instanceof Map) {
-                                orderBy = whereMap.remove("orderBy")
-                                page = whereMap.remove("page")
-                                pageSize = whereMap.remove("pageSize")
-                        }
+                        SelectSqlStatement sqlStatement = dbDialect.createSelectStatement(clazz, whereClauseParameters)
 
-                        sql << "SELECT "
-                        Map columns = [:]
-                        boolean hasColumnsProperty = isProperty(clazz, 'columns')
-
-                        createSelectList(clazz, hasColumnsProperty, sql, columns, delegate)
-
-                        sql.replace(sql.size() - 2, sql.size(), ' ')
-
-                        def start = sql.length()
-
-                        sql << "FROM $tbl WHERE "
-                        whereMap.each {
-                                if (hasColumnsProperty && delegate.columns?.containsKey(it.key)) {
-                                        columnName = delegate.columns[it.key]
-                                } else {
-                                        columnName = unCamelCaseColumn(it.key)
-                                }
-
-                                //console  'columnName:'  + columnName + ' value=' + it.value
-
-                                if (it.value == null) {
-                                        sql << "$columnName IS NULL $operator "
-                                } else {
-                                        sql << "$columnName = ?  $operator "
-
-                                        values << getValue(it?.value?.class, it.value)
-                                }
-                        }
-
-                        sql.replace(sql.size() - 4, sql.size(), '')
-                        countQuery = "SELECT count(*) " + sql.toString().substring(start)
-                        logger.fine("countQuery: ${countQuery}, values: ${values}")
-                        parseOrderBy(sql, orderBy, clazz)
-
-                        logger.finer sql.toString()
-
-                        return doPageSelect(pageSize, page, sql, values, orderBy, tbl, clazz, columns, countQuery)
+                        if (sqlStatement.countStatement)
+                                doPageSelect(whereClauseParameters.getPageSize(), whereClauseParameters.getPage(), sqlStatement, clazz)
+                        else
+                                doSelect(sqlStatement, clazz)
                 }
         }
 
-        private void addStaticListMethod(clazz) {
-                clazz.metaClass.static.list = { optionsMap ->
-                        def values = []
-                        def sql = new StringBuilder()
-                        String columnName
-                        def tbl = getTableName(clazz)
-                        def orderBy
-                        def page
-                        def pageSize
-                        def limit
+        private WhereClauseParameters createParameters(Map parameters) {
+                WhereClauseParameters whereClauseParameters = new WhereClauseParameters()
 
-                        if (optionsMap instanceof Map) {
-                                orderBy = optionsMap.remove("orderBy")
-                                page = optionsMap.remove("page")
-                                pageSize = optionsMap.remove("pageSize")
-                                limit = optionsMap.remove("limit")
+                if (parameters instanceof Map) {
+                        if (parameters.containsKey('operator'))
+                                if (parameters.operator.toUpperCase() == 'OR' || parameters.operator.toUpperCase() == 'AND')
+                                        whereClauseParameters.setOperator(parameters.remove('operator').toUpperCase())
+
+                        whereClauseParameters.setOrderBy(parameters.get("orderBy"))
+                        whereClauseParameters.setPage(parameters.get("page"))
+                        whereClauseParameters.setPageSize(parameters.get("pageSize"))
+
+                        if (parameters.get("countColumn")) {
+                                whereClauseParameters.setCountColumn(parameters.get("countColumn"))
                         }
 
-                        sql << "SELECT "
-                        Map columns = [:]
-                        boolean hasColumnsProperty = isProperty(clazz, 'columns')
+                        parameters.each { k, v ->
+                                whereClauseParameters[k] = v
+                        }
+                }
 
-                        createSelectList(clazz, hasColumnsProperty, sql, columns, delegate)
+                whereClauseParameters
+        }
 
-                        sql.replace(sql.size() - 2, sql.size(), ' ')
 
-                        sql << "FROM $tbl "
+        def addStaticListMethod(clazz) {
 
-                        parseOrderBy(sql, orderBy, clazz)
+                clazz.metaClass.static.list = { parameters ->
+                        WhereClauseParameters whereClauseParameters = createParameters(parameters)
 
-//                                           if (isNumeric(limit))
-//                                                sql << " LIMIT $limit"
-                        logger.finer sql.toString()
+                        SelectSqlStatement sqlStatement = dbDialect.createSelectStatement(clazz, whereClauseParameters)
 
-                        return doPageSelect(pageSize, page, sql, values, orderBy, tbl, clazz, columns, null)
+                        if (sqlStatement.countStatement)
+                                doPageSelect(whereClauseParameters.getPageSize(), whereClauseParameters.getPage(), sqlStatement, clazz)
+                        else
+                                doSelect(sqlStatement, clazz)
+
                 }
         }
+
 
         private void addClearMethod(clazz) {
                 clazz.metaClass.clearDynamicProperties = { ->
@@ -596,60 +499,33 @@ class EasyOM {
         }
 
         private void addDeleteMethod(clazz) {
-                clazz.metaClass.delete = { ->
-                        def values = []
-                        def sql = new StringBuilder()
-                        def columnName
+                clazz.metaClass.delete = {
+                        WhereClauseParameters whereClauseParameters = new WhereClauseParameters()
 
-                        sql << "DELETE FROM $tableName WHERE "
-
-                        clazz.primaryKeys.each {
-                                columnName = unCamelCaseColumn(it)
-                                sql << "$columnName = ?, and "
+                        clazz.primaryKey.each {
+                                String columnName = unCamelCaseColumn(it)
                                 def val = delegate?."$it"
-                                values << getValue(val?.class, val)
+                                whereClauseParameters[columnName] = dbDialect.getValue(val?.class, val)
                         }
 
-                        sql.replace(sql.size() - 6, sql.size(), '')
-
-                        logger.finer sql.toString()
+                        SqlStatement sqlStatement = dbDialect.createDeleteStatement(clazz, whereClauseParameters)
 
                         def db = getSqlInstance(null)
-                        db.executeUpdate(new GStringImpl(values.toArray(), sql.toString().trim().split('\\?')))
+                        db.executeUpdate(sqlStatement.sqlGString)
+
                 }
         }
 
         private void addStaticDeleteMethod(clazz) {
-                clazz.metaClass.static.delete = { Map whereMap ->
-                        def values = []
-                        def sql = new StringBuilder()
-                        def columnName
-                        def tbl = getTableName(clazz)
-                        def operator = "AND"
+                clazz.metaClass.static.delete = { Map parameters ->
 
-                        if (whereMap.containsKey('operator'))
-                                if (whereMap.operator.toUpperCase() == 'OR' || whereMap.operator.toUpperCase() == 'AND')
-                                        operator = whereMap.remove('operator').toUpperCase()
+                        WhereClauseParameters whereClauseParameters = createParameters(parameters)
 
-                        sql << "DELETE FROM $tbl WHERE "
-                        boolean hasColumnsProperty = isProperty(clazz, 'columns')
-                        whereMap.each {
-                                if (hasColumnsProperty && delegate.columns?.containsKey(it.key)) {
-                                        columnName = delegate.columns[it.key]
-                                } else {
-                                        columnName = unCamelCaseColumn(it.key)
-                                }
+                        SqlStatement sqlStatement = dbDialect.createDeleteStatement(clazz, whereClauseParameters)
 
-                                sql << "$columnName = ?  $operator "
-                                values << getValue(it?.value?.class, it.value)
-                        }
-
-                        sql.replace(sql.size() - 6, sql.size(), '')
-
-                        logger.finer sql.toString()
 
                         def db = getSqlInstance(null)
-                        db.executeUpdate(new GStringImpl(values.toArray(), sql.toString().trim().split('\\?')))
+                        db.executeUpdate(sqlStatement.sqlGString)
                 }
         }
 
@@ -738,30 +614,12 @@ class EasyOM {
         }
 
 
-        private def createSelectList(clazz, boolean hasColumnsProperty, sql, Map columns, Object thisObject) {
-                clazz.declaredFields.each {
-                        def prop = clazz.metaClass.getMetaProperty(it.name)
-                        if (clazz.metaClass.getMetaProperty(it.name) && !it.name.equals('metaClass') && (prop instanceof MetaBeanProperty)) {
-                                if (!prop.field.isStatic()) {
-                                        if (hasColumnsProperty && thisObject.columns?.containsKey(it.name)) {
-                                                sql << thisObject.columns[it.name] << ' as ' << it.name
-                                                columns[it.name] = thisObject.columns[it.name]
-                                        } else {
-                                                sql << unCamelCaseColumn(it.name) << ' as ' << it.name
-                                                columns[it.name] = unCamelCaseColumn(it.name)
-                                        }
-                                        sql << ', '
-
-                                }
-                        }
-                }
-        }
-
         def String camelCase(String column) {
                 StringBuffer newColumn = new StringBuffer()
-                boolean underScoreFound = false
+                Boolean underScoreFound = false
                 int index = -1
                 int currentPosition = 0
+
                 while ((index = column.indexOf('_', currentPosition)) > -1) {
                         newColumn.append(column.substring(currentPosition, index).toLowerCase())
                         newColumn.append(column.substring(index + 1, index + 2).toUpperCase())
@@ -860,136 +718,24 @@ class EasyOM {
                 return metaProperty.getSetter().getNativeParameterTypes()[0]
         }
 
-        def getColumnName(Class clazz, String propertyName) {
-                boolean hasColumnsProperty = isProperty(clazz, 'columns')
 
-                if (hasColumnsProperty) {
-                        def prop = clazz.metaClass.getMetaProperty(propertyName)
-                        def columnsMap = clazz?.columns
-
-                        if (clazz.metaClass.getMetaProperty(propertyName) && (prop instanceof MetaBeanProperty)) {
-                                if (prop.field != null && !prop.field.isStatic()) {
-                                        if (hasColumnsProperty && columnsMap?.containsKey(propertyName)) {
-                                                return columnsMap[propertyName]
-                                        } else {
-                                                return unCamelCaseColumn(propertyName)
-                                        }
-                                }
-                        }
-                }
-
-                return unCamelCaseColumn(propertyName)
-        }
-
-        private def parseOrderBy(sql, orderBy, clazz) {
-                def orderByAry
-                if (orderBy != null) {
-                        sql << "ORDER BY "
-                        orderByAry = orderBy.split(',')
-
-                        orderByAry.each {
-                                def orderByPart = it.trim().split(' ')
-                                sql << getColumnName(clazz, orderByPart[0])
-                                if (orderByPart.size() > 1)
-                                        sql << ' ' << orderByPart[1]
-                                sql << ','
-                        }
-
-                        sql.setLength(sql.length() - 1)
-                }
-        }
-
-        private def doPageSelect(pageSize, page,
-                                        def sql, List values, orderBy, tbl, clazz, Map columns, countQuery) {
-                def db = getSqlInstance(null)
-                List results = new ArrayList()
-
-                def totalCountQuery = countQuery
-                if (countQuery == null)
-                        totalCountQuery = "SELECT count(*) FROM $tbl".toString()
-
-                def pagedResults
-
-                if (page != null && pageSize != null) {
-                        if (orderBy == null)
-                                throw new RuntimeException('orderBy: [columnName] required')
-                        logger.fine("doPageSelect countQuery: ${countQuery}, values: ${values}")
-                        pagedResults = doPagedResults(sql.toString(), totalCountQuery, page, pageSize, (countQuery == null ? null : values))
-
-                        sql = pagedResults.sql
-                }
-
-                db.eachRow(new GStringImpl(values.toArray(), sql.toString().trim().split('\\?'))) { rs ->
-                        def row = clazz.newInstance()
-                        columns.each { col ->
-                                row."$col.key" = getSelectValue(getType(clazz, "$col.key"), rs."$col.key")
-                        }
-                        row.clearDynamicProperties()
-                        results << row
-                }
-
-                if (page != null && pageSize != null) {
-                        pagedResults.results = results
-                        return pagedResults
-                }
-
-                return results
-        }
-
-        def doPagedResults(def sql, def totalCountQuery, def page, int pageSize, def parameterValues) {
-                def newSQL = createPagingQuery(sql, page, pageSize)
+        PagedResults doPagedResults(def sql, String totalCountQuery, Integer page, Integer pageSize, def parameterValues) {
+                def newSQL = dbDialect.createPagingStringQuery(sql, page, pageSize)
                 logger.fine("countQuery parameters: ${parameterValues}")
+                PagedResults pagedResults = new PagedResults()
 
-                def totalCount = totalCountQuery.executeScalar(parameterValues)
-                def pageCount = (int) Math.ceil(totalCount / pageSize)
+                pagedResults.recordCount = totalCountQuery.executeScalar(parameterValues)
+                pagedResults.pageCount = (int) Math.ceil(totalCount / pageSize)
+                pagedResults.page = page
 
                 logger.finer """doPagingQuery: $newSQL
                                 recordCount:  $totalCount
                                 totalNumberOfPages: $pageCount
                                 page: $page"""
 
-                [recordCount: totalCount, 'sql': newSQL, pageCount: pageCount, page: page]
-        }
+                //[recordCount: totalCount, 'sql': newSQL, pageCount: pageCount, page: page]
 
-        def createPagingQuery(def sql, def page, int pageSize) {
-
-                if (databaseDialect.equals("firebird")) {
-                        Object[] gs = new Object[0];
-                        return new GStringImpl(gs, sql.replaceFirst("SELECT", "SELECT FIRST " + pageSize + " SKIP " + getSkip(pageSize, page)).split("/?"))
-                } else if (prop.getProperty('database.driver', '').indexOf('mysql') > -1) {
-                        def skip = getSkip(pageSize, page)
-                        return sql.plus(" LIMIT $pageSize OFFSET ${skip}")
-                }
-
-        }
-
-        def getSkip(int pageSize, def page) {
-                if (page >= 1) {
-                        return (pageSize * (page - 1))
-                } else {
-                        page = 1
-                        return 0
-                }
-        }
-
-        String createRecordCountQuery(def sql) {
-                def newSQL = sql.toString().replaceAll("\n", " ").replaceAll("\t", " ")
-
-                int index = newSQL.indexOf(" FROM ")
-                int orderByIndex = newSQL.toLowerCase().indexOf(" order by ")
-
-                if (index == -1) {
-                        throw new RuntimeException("What?, a paging query must have a \"FROM\" section. The \"FROM\" in the main FROM section must be capitalized.  Don't use all capitals with in other from clauses.")
-                }
-
-                if (orderByIndex == -1) {
-                        throw new RuntimeException("What?, a paging query must have a \"FROM\" section.")
-                        orderByIndex = sql.length()
-                }
-
-
-                return "SELECT COUNT(*) " + newSQL.substring(index, orderByIndex)
-
+                pagedResults
         }
 
 //        def loadModelClasses(path, root, app) {
@@ -1023,7 +769,7 @@ class EasyOM {
                                 if (db != null)
                                         try {
                                                 db.close()
-                                        }catch(Exception e){
+                                        } catch (Exception e) {
 
                                         }
 
@@ -1041,13 +787,13 @@ class EasyOM {
                                 }
                         }
 
-                        if (dataSourceName == null) {
+                        if (isEmpty(dataSourceName)) {
                                 dataSourceName = "";
                         } else {
                                 dataSourceName += ".";
                         }
 
-                        String dataSourceClass = (String) prop.getString(dataSourceName + "datasource.class");
+                        String dataSourceClass = (String) prop.getProperty(dataSourceName + "datasource.class");
 
                         if (dataSource != null) {
                                 Sql db = new Sql(dataSource)
@@ -1061,11 +807,10 @@ class EasyOM {
                                 dataSource = dsClass.newInstance();
                                 Map<String, Object> dataSourceProperties = getDataSourceProperties(dataSourceName)
                                 for (String property : dataSourceProperties.keySet()) {
-                                        callMethod(dataSource, "set" + capFirstLetter(property), prop.getString(dataSourceProperties.get(property)))
+                                        callMethod(dataSource, "set" + capFirstLetter(property), prop.getProperty(dataSourceProperties.get(property)))
                                 }
 
-                                Connection connection =  dataSource.connection
-                                databaseDialect = getDatabaseDialect(connection.metaData.databaseProductName)
+                                Connection connection = dataSource.connection
                                 connection.close()
 
                                 return new Sql(dataSource)
@@ -1076,11 +821,7 @@ class EasyOM {
                                 String url = prop.getProperty(dataSourceName + "database.url")
                                 String pwd = prop.getProperty(dataSourceName + "database.password");
                                 String username = prop.getProperty(dataSourceName + "database.username")
-                                if (databaseDialect == null){
-                                        Connection connection = Sql.newInstance(url, username, pwd, driver)
-                                        databaseDialect = getDatabaseDialect(connection.metaData.databaseProductName)
-                                        connection.close()
-                                }
+
                                 return Sql.newInstance(url, username, pwd, driver);
                         }
 
@@ -1091,8 +832,15 @@ class EasyOM {
                 return null;
         }
 
+        boolean isEmpty(String s) {
+                if (s)
+                        return s.isEmpty()
+                else
+                        return true
+        }
+
         String getDatabaseDialect(String s) {
-                if (s.toLowerCase().contains("firebird")){
+                if (s.toLowerCase().contains("firebird")) {
                         return "firebird"
                 }
         }
@@ -1133,6 +881,7 @@ class EasyOM {
                                 }
                         }
 
+
                         Class<?> cls = method.getParameterTypes()[0];
                         if (cls.getName().contains("boolean")) {
                                 cls = Boolean.class;
@@ -1153,6 +902,100 @@ class EasyOM {
                         throw new RuntimeException("Error setting DataSource property. datasource=" + ds.toString() + ", methodName=" + methodName + ", " +
                                 "url=" + parameterValue, e);
                 }
+        }
+
+
+        def doPageSelect(Integer pageSize, Integer page, sybrix.easyom.SelectSqlStatement selectSqlStatement, Class modelClass) {
+                def db = getSqlInstance(null)
+                List results = new ArrayList()
+
+                def pagedResults
+
+
+                def ct = db.firstRow(selectSqlStatement.countStatement.sqlGString)
+
+                def totalCount = ct.ct
+                def pageCount = (int) Math.ceil(totalCount / pageSize)
+
+
+                pagedResults = [recordCount: totalCount, pageCount: pageCount, page: page]
+
+                try {
+                        db.eachRow(selectSqlStatement.sqlGString) { rs ->
+                                def row = modelClass.newInstance()
+                                selectSqlStatement.selectColumnsAndAliasMap.columnAliasMap.each { col ->
+                                        row."$col.key" = getSelectValue(getType(modelClass, "$col.key"), rs."$col.key")
+                                }
+                                row.clearDynamicProperties()
+                                results << row
+                        }
+                } catch (Exception e) {
+                        e.printStackTrace()
+                }
+
+                pagedResults.results = results
+
+                pagedResults
+        }
+
+        private def doSelect(sybrix.easyom.SelectSqlStatement selectSqlStatement, Class modelClass) {
+                def db = getSqlInstance(null)
+                List results = new ArrayList()
+
+                db.eachRow(selectSqlStatement.sqlGString) { rs ->
+                        def row = modelClass.newInstance()
+                        selectSqlStatement.selectColumnsAndAliasMap.columnAliasMap.each { col ->
+                                row."$col.key" = getSelectValue(getType(modelClass, "$col.key"), rs."$col.key")
+                        }
+                        row.clearDynamicProperties()
+                        results << row
+                }
+
+                return results
+        }
+
+//        private def doSelect(sybrix.easyom.SelectSqlStatement selectSqlStatement, Class modelClass) {
+//                def db = getSqlInstance(null)
+//                List results = new ArrayList()
+//                Map columnsInResultSet
+//
+//                db.eachRow(selectSqlStatement.sqlGString) { rs ->
+//                        def row = modelClass.newInstance()
+//                        if (columnsInResultSet == null) {
+//                                columnsInResultSet = getColumnsFromResultSet(rs.getMetaData())
+//                        }
+//
+//                        columnsInResultSet.each { columnLabel,propertyName ->
+//                                row."$propertyName" = getSelectValue(getType(modelClass, propertyName), rs."$columnLabel")
+//                        }
+//                        row.clearDynamicProperties()
+//                        results << row
+//                }
+//
+//                return results
+//        }
+
+        Map getColumnsFromResultSet(ResultSetMetaData resultSetMetaData) {
+                Map columns = [:]
+                for (Integer i = 1; i <= resultSetMetaData.columnCount; i++) {
+                        columns[resultSetMetaData.getColumnLabel(i)] = camelCase(resultSetMetaData.getColumnLabel(i).toLowerCase())
+                }
+
+                columns
+        }
+
+        Blob createBlob(Connection connection, InputStream inputStream) {
+                Blob blob = connection.createBlob();
+                OutputStream out = blob.setBinaryStream(1)
+
+                byte[] data = new byte[1024]
+                int c = 0
+
+                while ((c = inputStream.read(data)) > -1) {
+                        out.write(data, 0, c)
+                }
+
+                blob
         }
 }
 

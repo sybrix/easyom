@@ -2,22 +2,22 @@ package sybrix.easyom
 
 
 import sybrix.easyom.EasyOM
-import sybrix.easyom.PropertiesFile
 import model.TestTable
 import model.TestTable2
 
 
 class EasyOMTest extends GroovyTestCase {
 
-        private sybrix.easyom.PropertiesFile propFile = new PropertiesFile("classpath:env.properties");
-        private boolean isFirebird = false
+        private Properties propFile = new Properties()
+
+        //("classpath:env.properties");
+
         EasyOM em
+        boolean  isFirebird = false
+        boolean  isMySql = false
 
         public EasyOMTest() {
-                if (propFile.getString("database.driver","").indexOf("firebird") > -1) {
-                        isFirebird = true
-                }
-                isFirebird = true
+                propFile.load(EasyOM.class.getResourceAsStream("/env.properties"))
 
                 em = new EasyOM(propFile)
                 em.injectMethods(TestTable.class)
@@ -28,7 +28,7 @@ class EasyOMTest extends GroovyTestCase {
                 try {
                         def db = em.getSqlInstance(null)
 
-                        if (!isFirebird) {
+                        if (isFirebird) {
                                 db.execute("""
                                 CREATE TABLE `tbltesttable` (
                                   `pk_column` int(11) NOT NULL auto_increment,
@@ -49,21 +49,21 @@ class EasyOMTest extends GroovyTestCase {
                                         ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
                                 """)
                                 return
-                        } else {
+                        } else if (isMySql){
                                 def sql = """
                                 CREATE TABLE TBLTESTTABLE (
-                                  PK_COLUMN INTEGER NOT NULL,
+                                  PK_COLUMN BIGINT NOT NULL,
                                   SMALL_INT_COLUMN SMALLINT,
                                   INTEGER_COLUMN INTEGER,
-                                  DOUBLE_PRECISION_COLUMN DOUBLE PRECISION,
-                                  NUMERIC_COLUMN NUMERIC(15, 2),
-                                  DECIMAL_COLUMN NUMERIC(15, 2),
+                                  DOUBLE_PRECISION_COLUMN DOUBLE,
+                                  NUMERIC_COLUMN FLOAT,
+                                  DECIMAL_COLUMN DECIMAL,
                                   DATE_COLUMN DATE,
-                                  TIMESTAMP_COLUMN DATE,
+                                  TIMESTAMP_COLUMN TIMESTAMP,
                                   CHAR_COLUMN CHAR(20) ,
                                   VARCHAR_COLUMN VARCHAR(20) ,
                                   BLOB_COLUMN BLOB,
-                                  BOOLEAN_COLUMN CHAR(1),
+                                  BOOLEAN_COLUMN BOOLEAN,
                                   FLOAT_COLUMN FLOAT,
                                   COLUMN1 VARCHAR(20) );
                         """
@@ -88,8 +88,28 @@ class EasyOMTest extends GroovyTestCase {
                                       NEW.PK_COLUMN = GEN_ID(TESTTABLE_PK_COLUMN_GEN_NEW, 1);
                                 END;
                         """);
+                        } else {
+                                db.execute("""
+                               CREATE TABLE TBLTESTTABLE (
+                                  PK_COLUMN BIGINT NOT NULL constraint PK_COLUMN_PK primary key,
+                                  SMALL_INT_COLUMN SMALLINT,
+                                  INTEGER_COLUMN INTEGER,
+                                  DOUBLE_PRECISION_COLUMN DOUBLE PRECISION,
+                                  NUMERIC_COLUMN NUMERIC(15, 2),
+                                  DECIMAL_COLUMN NUMERIC(15, 2),
+                                  DATE_COLUMN TIMESTAMP ,
+                                  TIMESTAMP_COLUMN TIMESTAMP,
+                                  CHAR_COLUMN CHAR(20) ,
+                                  VARCHAR_COLUMN VARCHAR(20) ,
+                                  BLOB_COLUMN BLOB,
+                                  CLOB_COLUMN CLOB,
+                                  BOOLEAN_COLUMN BOOLEAN,
+                                  FLOAT_COLUMN FLOAT,
+                                  COLUMN1 VARCHAR(20) )
+                        """)
                         }
 
+                        db.execute("CREATE SEQUENCE id_seq START WITH 1 INCREMENT BY 1")
                         db.close()
 
                 } catch (Exception e) {
@@ -138,7 +158,7 @@ class EasyOMTest extends GroovyTestCase {
         public void testStringExecuteWithBean() {
                 insertRecord()
                 def parameters = [254]
-                def r = "SELECT small_Int_Column smallIntColumn, blob_column FROM tblTestTable".executeQuery(TestTable.class)
+                def r = """SELECT small_Int_Column , blob_column  FROM tblTestTable""".executeQuery(TestTable.class)
 
                 assertTrue(r.size() > 0)
                 assertEquals( 254, r[0].smallIntColumn)
@@ -215,7 +235,7 @@ class EasyOMTest extends GroovyTestCase {
                 tbl.decimalColumn = 6.3
                 tbl.dateColumn = new Date()
                 tbl.charColumn = 'hey now - '
-                tbl.blobColumn = "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG".getBytes()
+                tbl.blobColumn = new Blob("GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG".getBytes())
                 tbl.boolColumn = false
                 tbl.testMapColumn = "working "
                 tbl.timestampColumn = new Date()
@@ -492,8 +512,10 @@ class EasyOMTest extends GroovyTestCase {
                         tbl.testMapColumn = "working"
                         tbl.insert()
                 }
+//                insertdef w = new WhereClauseParameters()
+//                w.orderBy = "smallInt"
 
-                List results = TestTable.list(orderBy: 'smallIntColumn')
+                List results = TestTable.list([orderBy: "smallIntColumn"])
                 assertTrue(results.size() > 0)
 
                 TestTable.delete([smallIntColumn: 300])
@@ -542,9 +564,22 @@ class EasyOMTest extends GroovyTestCase {
         private def dropTable() {
                 def db = em.getSqlInstance(null)
                 try {
-                        db.executeUpdate('DROP TABLE TBLTESTTABLE;');
+
                         if (isFirebird == true) {
+                                db.executeUpdate('DROP TABLE TBLTESTTABLE;');
                                 db.executeUpdate('DROP GENERATOR TESTTABLE_PK_COLUMN_GEN_NEW;');
+                        } else {
+                                try {
+                                        db.executeUpdate('DROP TABLE TBLTESTTABLE');
+                                }catch (e){
+
+                                }
+                                try {
+                                        db.executeUpdate('DROP SEQUENCE id_seq RESTRICT');
+                                }catch (e){
+
+                                }
+
                         }
                 }catch (Exception e){
                 }finally {
@@ -552,72 +587,4 @@ class EasyOMTest extends GroovyTestCase {
                 }
         }
 
-}
-
-class Blob implements java.sql.Blob {
-        InputStream ios
-
-        public Blob(String data) {
-                ios = new ByteArrayInputStream(data.getBytes())
-        }
-
-        public Blob(byte[] data) {
-                ios = new ByteArrayInputStream(data)
-        }
-
-        public Blob(InputStream ios) {
-                this.ios = ios
-        }
-
-        long length() {
-                return ios.bytes.length
-        }
-
-        byte[] getBytes(long pos, int length) {
-                byte[] data = new byte[length]
-                ios.read(data, pos, length)
-                return data
-        }
-
-        InputStream getBinaryStream() {
-                return ios
-        }
-
-        long position(byte[] bytes, long l) {
-                return 0
-        }
-
-        long position(java.sql.Blob blob, long l) {
-                return 0
-        }
-
-        int setBytes(long l, byte[] bytes) {
-                return 0
-        }
-
-        int setBytes(long l, byte[] bytes, int i, int i1) {
-                return 0
-        }
-
-        OutputStream setBinaryStream(long l) {
-                ios.mark(l)
-                new ByteArrayOutputStream()
-                return null
-        }
-
-        void truncate(long l) {
-
-        }
-
-        void free() {
-
-        }
-
-        InputStream getBinaryStream(long pos, long length) {
-                byte[] data = new byte[length]
-                ios.read(data, pos, length)
-
-                new ByteArrayInputStream(data)
-
-        }
 }
