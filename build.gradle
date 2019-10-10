@@ -11,6 +11,9 @@ plugins {
     id 'groovy'
 }
 
+group = 'sybrix-easygsp2'
+version = '1.0.0-SNAPSHOT'
+
 dependencies {
 
     // Use the latest Groovy version for building this library
