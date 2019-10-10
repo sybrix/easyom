@@ -2,6 +2,7 @@ package sybrix.easyom.dialects
 
 import org.codehaus.groovy.runtime.GStringImpl
 import org.codehaus.groovy.runtime.metaclass.ThreadManagedMetaBeanProperty
+import sybrix.easyom.DbServerFunction
 import sybrix.easyom.SelectColumnsAndAliasMap
 import sybrix.easyom.SelectSqlStatement
 import sybrix.easyom.SqlStatement
@@ -25,11 +26,11 @@ abstract class AbstractDialect implements Dialect {
         private String tablePrefix = ""
 
 
-        public void init(Properties properties){
-               tableNameCamelCased = Boolean.parseBoolean(properties.getProperty("camel.case.table.name","false"))
-               columnsNamesCamelCased = Boolean.parseBoolean(properties.getProperty("camel.case.column.name","true"))
-               useTablePrefix = Boolean.parseBoolean(properties.getProperty("use.table.prefix","false"))
-               tablePrefix = properties.getProperty("table.prefix")
+        public void init(Properties properties) {
+                tableNameCamelCased = Boolean.parseBoolean(properties.getProperty("camel.case.table.name", "false"))
+                columnsNamesCamelCased = Boolean.parseBoolean(properties.getProperty("camel.case.column.name", "true"))
+                useTablePrefix = Boolean.parseBoolean(properties.getProperty("use.table.prefix", "false"))
+                tablePrefix = properties.getProperty("table.prefix")
         }
 
         SelectSqlStatement createSelectStatement(Class modelClass, WhereClauseParameters whereClauseParameters) {
@@ -70,25 +71,25 @@ abstract class AbstractDialect implements Dialect {
 
                 sql.append(selectPart)
                 sql.append(fromPart)
-                sql.append(whereClauseAndValues?.whereClause?:"")
+                sql.append(whereClauseAndValues?.whereClause ?: "")
                 sql.append(createOrderByClause(orderBy, modelClass))
 
-                GString sqlGstring = new GStringImpl(whereClauseAndValues?.values?.toArray()?:[].toArray(), sql.toString().trim().split('\\?'))
+                GString sqlGstring = new GStringImpl(whereClauseAndValues?.values?.toArray() ?: [].toArray(), sql.toString().trim().split('\\?'))
 
                 if (whereClauseParameters.getPage()) {
                         String pagingAfterOrderBy = createPagingAfterOrderBy(page, pageSize, orderBy)
                         sql.append(pagingAfterOrderBy)
 
                         StringBuilder countQuery = new StringBuilder()
-                        countQuery.append("SELECT count(").append(whereClauseParameters.getCountColumn()).append(") ct ").append(fromPart).append(whereClauseAndValues?.whereClause?:"")
+                        countQuery.append("SELECT count(").append(whereClauseParameters.getCountColumn()).append(") ct ").append(fromPart).append(whereClauseAndValues?.whereClause ?: "")
 
-                        GString gstring = new GStringImpl(whereClauseAndValues?.values?.toArray()?:[].toArray(), countQuery.toString().trim().split('\\?'))
+                        GString gstring = new GStringImpl(whereClauseAndValues?.values?.toArray() ?: [].toArray(), countQuery.toString().trim().split('\\?'))
                         SqlStatement countStatement = new SqlStatement(sql: countQuery.toString(), sqlGString: gstring, values: whereClauseAndValues?.values)
 
-                        new SelectSqlStatement(sql: fromPart.toString(), sqlGString: sqlGstring, values: whereClauseAndValues?.values, countStatement: countStatement,selectColumnsAndAliasMap: selectColumnsAndAliasMap)
+                        new SelectSqlStatement(sql: fromPart.toString(), sqlGString: sqlGstring, values: whereClauseAndValues?.values, countStatement: countStatement, selectColumnsAndAliasMap: selectColumnsAndAliasMap)
 
                 } else {
-                        new SelectSqlStatement(sql: sql.toString(), sqlGString: sqlGstring, values: whereClauseAndValues?.values,selectColumnsAndAliasMap: selectColumnsAndAliasMap)
+                        new SelectSqlStatement(sql: sql.toString(), sqlGString: sqlGstring, values: whereClauseAndValues?.values, selectColumnsAndAliasMap: selectColumnsAndAliasMap)
                 }
         }
 
@@ -120,10 +121,18 @@ abstract class AbstractDialect implements Dialect {
                         else
                                 columnName = unCamelCaseColumn(it)
 
-                        sql << "$columnName = ?, "
-
                         def _type = getType(clazz, it)
-                        values << getValue(_type, modelInstance?."$it")
+                        def v = getValue(_type, modelInstance?."$it")
+
+                        if (v instanceof DbServerFunction) {
+                                sql << "$columnName =  ${v.function()}, "
+                        } else if (v != null && v?.toString().startsWith("function:")) {
+                                sql << "$columnName =  ${v?.toString().substring(9).trim()}, "
+
+                        } else {
+                                sql << "$columnName = ?, "
+                                values << v
+                        }
                 }
 
                 sql.replace(sql.size() - 2, sql.size(), '')
@@ -138,7 +147,7 @@ abstract class AbstractDialect implements Dialect {
                 }
 
                 sql.replace(sql.size() - 6, sql.size(), '')
-                GString gstring = new GStringImpl(values?.toArray()?:[].toArray(), sql.toString().trim().split('\\?'))
+                GString gstring = new GStringImpl(values?.toArray() ?: [].toArray(), sql.toString().trim().split('\\?'))
 
                 new SqlStatement(sql: sql.toString(), sqlGString: gstring, values: values)
         }
@@ -160,7 +169,7 @@ abstract class AbstractDialect implements Dialect {
 
                 boolean manualPrimaryKeys
                 boolean sequence = false
-                if (isProperty(clazz,"sequence")){
+                if (isProperty(clazz, "sequence")) {
                         sequence = true
                 }
 
@@ -197,9 +206,18 @@ abstract class AbstractDialect implements Dialect {
                 s << ') VALUES ('
 
                 properties.each {
-                        s << '?,'
+
                         def val = instance."$it"
-                        values << getValue(val?.class, val)
+
+
+                        if (val instanceof DbServerFunction) {
+                                s << "${val.function()}, "
+                        } else if (val?.toString().startsWith("function:")) {
+                                s << "${val?.toString().substring(9).trim()}, "
+                        } else {
+                                s << '?,'
+                                values << getValue(val?.class, val)
+                        }
                         /*
                         if (val == null){
                                 values << val
@@ -214,13 +232,13 @@ abstract class AbstractDialect implements Dialect {
                         }
                         */
                 }
-                if (properties.size()>0) {
+                if (properties.size() > 0) {
                         s.replace(s.size() - 1, s.size(), '')
                 }
                 s << ')'
 
 
-                GString gString = new GStringImpl(values?.toArray()?:[].toArray(), s.toString().trim().split('\\?'))
+                GString gString = new GStringImpl(values?.toArray() ?: [].toArray(), s.toString().trim().split('\\?'))
                 new SqlStatement(sqlGString: gString)
         }
 
@@ -241,6 +259,8 @@ abstract class AbstractDialect implements Dialect {
                 whereMap.each {
                         def filterOperator
                         def key = it.key
+                        def _value = it.value
+
                         if (it.key.toString().endsWith(">")) {
                                 key = it.key.toString().substring(0, it.key.toString().length() - 2).trim()
                                 filterOperator = ">"
@@ -264,14 +284,29 @@ abstract class AbstractDialect implements Dialect {
                                 columnName = unCamelCaseColumn(key)
                         }
 
-                        if (it.value == null) {
+                        if (_value == null) {
                                 sql << "$columnName IS NULL $operator "
                         } else if (filterOperator) {
-                                sql << "$columnName $filterOperator ?  $operator "
-                                whereClauseAndValues.values << getValue(it?.value?.class, it.value)
+                                if (_value instanceof List) {
+                                        _value.each { param ->
+                                                sql << "$columnName $filterOperator ?  OR "
+                                                whereClauseAndValues.values << getValue(param?.class, param)
+                                        }
+
+                                } else {
+                                        sql << "$columnName $filterOperator ?  $operator "
+                                        whereClauseAndValues.values << getValue(_value?.class, _value)
+                                }
                         } else {
-                                sql << "$columnName = ?  $operator "
-                                whereClauseAndValues.values << getValue(it?.value?.class, it.value)
+                                if (_value instanceof List) {
+                                        _value.each { param ->
+                                                sql << "$columnName = ?  OR "
+                                                whereClauseAndValues.values << getValue(param?.class, param)
+                                        }
+                                }else {
+                                        sql << "$columnName = ?  $operator "
+                                        whereClauseAndValues.values << getValue(_value?.class, _value)
+                                }
                         }
                 }
 
@@ -292,7 +327,7 @@ abstract class AbstractDialect implements Dialect {
                 WhereClauseAndValues whereClauseAndValues = createWhereClause(clazz, whereMap)
                 sql.append(whereClauseAndValues.whereClause)
 
-                GString gstring = new GStringImpl(whereClauseAndValues?.values?.toArray()?:[].toArray(), sql.toString().trim().split('\\?'))
+                GString gstring = new GStringImpl(whereClauseAndValues?.values?.toArray() ?: [].toArray(), sql.toString().trim().split('\\?'))
                 new SqlStatement(sql: sql.toString(), sqlGString: gstring, values: whereClauseAndValues.values)
 
         }
@@ -413,8 +448,8 @@ abstract class AbstractDialect implements Dialect {
 
         public SelectColumnsAndAliasMap createSelectColumnsAndAliasMap(Class clazz) {
                 Map<String, String> columns = [:]
-                if (clazz == null){
-                        return  columns
+                if (clazz == null) {
+                        return columns
                 }
 
                 boolean hasColumnsProperty = isProperty(clazz, 'columns')
@@ -469,6 +504,15 @@ abstract class AbstractDialect implements Dialect {
                 }
         }
 
+
+        protected boolean isProperty(Object obj, String propertyName) {
+                def metaProperty = obj.class.metaClass.getMetaProperty(propertyName)
+                if (metaProperty instanceof MetaBeanProperty) {
+                        return true
+                } else {
+                        return false
+                }
+        }
 
         protected Class getType(Class clazz, String propertyName) {
                 MetaBeanProperty metaProperty = clazz.metaClass.getMetaProperty(propertyName)
@@ -589,7 +633,7 @@ abstract class AbstractDialect implements Dialect {
                 }
         }
 
-        protected String  parseOrderBy(StringBuffer sql, String orderBy, Class clazz) {
+        protected String parseOrderBy(StringBuffer sql, String orderBy, Class clazz) {
                 def orderByAry
                 if (orderBy != null) {
                         sql << "ORDER BY "

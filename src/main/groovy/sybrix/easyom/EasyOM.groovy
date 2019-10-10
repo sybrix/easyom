@@ -1,7 +1,6 @@
 package sybrix.easyom
 
 import groovy.sql.Sql
-import org.apache.derby.jdbc.EmbeddedDataSource
 import sybrix.easyom.dialects.Dialect
 
 import java.beans.BeanInfo
@@ -212,15 +211,21 @@ class EasyOM {
                                         def row = clazz.newInstance()
                                         for (i in 1..rs.getMetaData().getColumnCount()) {
 
+                                                String colName = rs.getMetaData().getColumnLabel(i)
                                                 String propertyName = columns[rs.getMetaData().getColumnLabel(i).toUpperCase()]
-                                                if(propertyName == null){
+
+                                                if (propertyName == null) {
                                                         propertyName = columns[camelCase(rs.getMetaData().getColumnLabel(i).toLowerCase()).toUpperCase()]
                                                 }
-                                                String colName = rs.getMetaData().getColumnLabel(i)
+                                                if (propertyName == null) {
+                                                        logger.fine("propertyName not found for column ${colName} for class ${clazz.name}")
+                                                }
+
+
                                                 if (colName != null)
-                                                        row."$propertyName" = dbDialect.getValue(getType(clazz, "$propertyName"), rs."$colName")
+                                                        row."$propertyName" = dbDialect.getValue(getPropertyClassType(clazz, "$propertyName"), rs."$colName")
                                         }
-                                        row.clearDynamicProperties()
+                                        //row.clearDynamicProperties()
                                         results << row
                                 }
                         }
@@ -349,44 +354,80 @@ class EasyOM {
 
                         for (int i = 0; i < sqlStatement.sqlGString.values.length; i++) {
                                 if (sqlStatement.sqlGString.values[i] instanceof sybrix.easyom.Blob) {
-                                        sqlStatement.sqlGString.values[i] = createBlob(db.dataSource.getConnection(),
-                                                ((sybrix.easyom.Blob) sqlStatement.sqlGString.values[i]).toInputStream())
+                                        sqlStatement.sqlGString.values[i] = createBlob(db.dataSource.getConnection(), ((sybrix.easyom.Blob) sqlStatement.sqlGString.values[i]).toInputStream())
                                 }
                         }
                         def l = db.executeInsert(sqlStatement.sqlGString)
 
-                        l[0][0]
+                        def id = l[0][0]
+
+                        id
+
                 }
         }
 
-        private def getSelectValue(obj, val) {
-                if (val == null)
-                        return
+//        private def getSelectValue(Class obj, val) {
+//                if (val == null)
+//                        return
+//
+//                if (obj == java.util.Date.class && val.class == java.sql.Timestamp) {
+//                        return new java.util.Date(val.time)
+//                } else if (obj == java.sql.Date.class) {
+//                        return new java.util.Date(val.time)
+//
+//                } else if (obj == java.lang.Boolean.class || obj == boolean.class) {
+//                        //console  "EasyOM.getValue() " + val + " " + obj
+//                        return (val == '1' || val == 1 || val == 'true' || val == 't' || val == 'Y' || val == true) ? true : false
+//                } else if (obj == java.lang.String.class && val instanceof java.sql.Blob) {
+//                        java.sql.Blob blob = (java.sql.Blob) val
+//                        byte[] data = new byte[1024]
+//                        ByteArrayOutputStream out = new ByteArrayOutputStream()
+//
+//                        int c = 0;
+//                        while (true) {
+//                                c = blob.binaryStream.read(data)
+//                                out.write(data, 0, c)
+//                                if (out.size() >= blob.length()) {
+//                                        break
+//                                }
+//                        }
+//
+//                        return out.toString()
+//                } else if (obj == java.lang.String.class && val instanceof java.sql.Clob) {
+//                        java.sql.Clob clob = (java.sql.Clob) val
+//                        char[] data = new char[1024]
+//                        StringBuffer sb = new StringBuffer()
+//
+//                        int c = 0;
+//                        while (true) {
+//                                c = clob.getCharacterStream().read(data)
+//                                sb.append(data, 0, c)
+//
+//                                if (sb.length() >= sb.length()) {
+//                                        break
+//                                }
+//                        }
+//
+//
+//                        return sb.toString()
+//
+//                } else {
+//                        return val
+//                }
+//        }
 
-                if (obj == java.util.Date.class && val.class == java.sql.Timestamp) {
-                        return new java.util.Date(val.time)
-                } else if (obj == java.sql.Date.class) {
-                        return new java.util.Date(val.time)
-                } else if (obj == java.lang.Boolean.class || obj == boolean.class) {
-                        //console  "EasyOM.getValue() " + val + " " + obj
-                        return (val == '1' || val == 1 || val == 'true' || val == 't' || val == 'Y' || val == true) ? true : false
-                } else {
-                        return val
-                }
-        }
-
-        private def getValue(obj, val) {
-                if (val == null)
-                        return null
-
-                if (obj == java.sql.Date.class || obj == java.util.Date.class) {
-                        return new java.sql.Timestamp(val.time)
-                } else if (obj == java.lang.Boolean.class || obj == boolean.class) {
-                        return (val == true ? '1' : '0')
-                } else {
-                        return val
-                }
-        }
+//        private def getValue(obj, val) {
+//                if (val == null)
+//                        return null
+//
+//                if (obj == java.sql.Date.class || obj == java.util.Date.class) {
+//                        return new java.sql.Timestamp(val.time)
+//                } else if (obj == java.lang.Boolean.class || obj == boolean.class) {
+//                        return (val == true ? '1' : '0')
+//                } else {
+//                        return val
+//                }
+//        }
 
         public void addSaveMethod(clazz) {
                 clazz.metaClass.save = { ->
@@ -713,9 +754,14 @@ class EasyOM {
                 }
         }
 
-        Class getType(Class clazz, String propertyName) {
-                MetaBeanProperty metaProperty = clazz.metaClass.getMetaProperty(propertyName)
-                return metaProperty.getSetter().getNativeParameterTypes()[0]
+        Class getPropertyClassType(Class clazz, String propertyName) {
+                try {
+                        MetaBeanProperty metaProperty = clazz.metaClass.getMetaProperty(propertyName)
+                        return metaProperty.getSetter().getNativeParameterTypes()[0]
+                } catch (Exception e) {
+                        logger.finer "class ${clazz.name}, propertyName: ${propertyName}"
+                        throw e;
+                }
         }
 
 
@@ -740,7 +786,7 @@ class EasyOM {
 
 //        def loadModelClasses(path, root, app) {
 //                new File(path.toString()).eachFile {
-//                        if (!it.isDirectory()) {
+//                        if (!it.isDirectory()) {query
 //                                def cls = it.absolutePath.substring(root.size()) //.replaceAll("\\\\", ".").replaceAll("/",".")
 //                                injectMethods(app.classForName(cls))
 //                        } else {
@@ -924,7 +970,7 @@ class EasyOM {
                         db.eachRow(selectSqlStatement.sqlGString) { rs ->
                                 def row = modelClass.newInstance()
                                 selectSqlStatement.selectColumnsAndAliasMap.columnAliasMap.each { col ->
-                                        row."$col.key" = getSelectValue(getType(modelClass, "$col.key"), rs."$col.key")
+                                        row."$col.key" = dbDialect.getValue(getPropertyClassType(modelClass, "$col.key"), rs."$col.key")
                                 }
                                 row.clearDynamicProperties()
                                 results << row
@@ -945,7 +991,7 @@ class EasyOM {
                 db.eachRow(selectSqlStatement.sqlGString) { rs ->
                         def row = modelClass.newInstance()
                         selectSqlStatement.selectColumnsAndAliasMap.columnAliasMap.each { col ->
-                                row."$col.key" = getSelectValue(getType(modelClass, "$col.key"), rs."$col.key")
+                                row."$col.key" = dbDialect.getValue(getPropertyClassType(modelClass, "$col.key"), rs."$col.key")
                         }
                         row.clearDynamicProperties()
                         results << row
@@ -966,7 +1012,7 @@ class EasyOM {
 //                        }
 //
 //                        columnsInResultSet.each { columnLabel,propertyName ->
-//                                row."$propertyName" = getSelectValue(getType(modelClass, propertyName), rs."$columnLabel")
+//                                row."$propertyName" = getSelectValue(getPropertyClassType(modelClass, propertyName), rs."$columnLabel")
 //                        }
 //                        row.clearDynamicProperties()
 //                        results << row

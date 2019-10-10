@@ -23,6 +23,7 @@ class Blob {
 
         public Blob(java.sql.Blob blob) {
                 this.blob = blob
+                inputStream = blob.getBinaryStream()
         }
 
         public InputStream toInputStream() {
@@ -34,4 +35,5 @@ class Blob {
                         return inputStream
                 }
         }
+
 }
