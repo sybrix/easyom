@@ -1,6 +1,7 @@
 package sybrix.easyom
 
 import groovy.sql.Sql
+import groovy.util.logging.Slf4j
 import sybrix.easyom.dialects.Dialect
 
 import java.beans.BeanInfo
@@ -37,9 +38,9 @@ import static java.util.logging.Level.FINE
  limitations under the License.
  * */
 
+@Slf4j
 class EasyOM {
 
-        private static final Logger logger = Logger.getLogger(EasyOM.class.getName())
 
         private Dialect dbDialect
 
@@ -87,7 +88,7 @@ class EasyOM {
                 addStaticFindAllMethod(clazz)
                 addStaticListMethod(clazz)
 
-                logger.info('EasyOM loaded class:' + clazz.name)
+                log.info('EasyOM loaded class:' + clazz.name)
         }
 
         private def initializeDBProperties(Properties propertiesFile) {
@@ -100,7 +101,7 @@ class EasyOM {
                                 dbConnectionTested = true
                         } catch (Throwable e) {
                                 //e.printStackTrace()
-                                logger.log(FINE, "newSqlInstance() failed", e)
+                                log.error("newSqlInstance() failed", e)
                         } finally {
                                 if (db != null)
                                         db.close()
@@ -185,7 +186,7 @@ class EasyOM {
                                 sql = pagedResults.sql
                         }
 
-                        logger.finer delegate.toString()
+                        log.debug delegate.toString()
 
                         if (clazz == null) {
                                 results = db.rows(sql)
@@ -218,7 +219,7 @@ class EasyOM {
                                                         propertyName = columns[camelCase(rs.getMetaData().getColumnLabel(i).toLowerCase()).toUpperCase()]
                                                 }
                                                 if (propertyName == null) {
-                                                        logger.fine("propertyName not found for column ${colName} for class ${clazz.name}")
+                                                        log.debug("propertyName not found for column ${colName} for class ${clazz.name}")
                                                 }
 
 
@@ -332,7 +333,7 @@ class EasyOM {
 
                                 if (!delegate.dynamicProperties.contains(name))
                                         delegate.dynamicProperties << name
-                                logger.finest("setProperty $name")
+                                log.debug("setProperty $name")
                         }
                 }
         }
@@ -702,7 +703,7 @@ class EasyOM {
         }
 
         def Sql getSqlInstance(String dataSourceName) {
-                logger.fine 'Obtaining SQL Instance from  threadlocal'
+                log.debug('Obtaining SQL Instance from  threadlocal')
                 def db = sqlThreadLocal.get()
                 if (db != null)
                         return db
@@ -759,7 +760,7 @@ class EasyOM {
                         MetaBeanProperty metaProperty = clazz.metaClass.getMetaProperty(propertyName)
                         return metaProperty.getSetter().getNativeParameterTypes()[0]
                 } catch (Exception e) {
-                        logger.finer "class ${clazz.name}, propertyName: ${propertyName}"
+                        log.error "class ${clazz.name}, propertyName: ${propertyName}"
                         throw e;
                 }
         }
@@ -767,14 +768,14 @@ class EasyOM {
 
         PagedResults doPagedResults(def sql, String totalCountQuery, Integer page, Integer pageSize, def parameterValues) {
                 def newSQL = dbDialect.createPagingStringQuery(sql, page, pageSize)
-                logger.fine("countQuery parameters: ${parameterValues}")
+                log.debug("countQuery parameters: ${parameterValues}")
                 PagedResults pagedResults = new PagedResults()
 
                 pagedResults.recordCount = totalCountQuery.executeScalar(parameterValues)
                 pagedResults.pageCount = (int) Math.ceil(totalCount / pageSize)
                 pagedResults.page = page
 
-                logger.finer """doPagingQuery: $newSQL
+                log.debug """doPagingQuery: $newSQL
                                 recordCount:  $totalCount
                                 totalNumberOfPages: $pageCount
                                 page: $page"""
