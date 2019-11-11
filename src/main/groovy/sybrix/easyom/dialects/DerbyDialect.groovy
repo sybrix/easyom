@@ -41,7 +41,7 @@ class DerbyDialect extends AbstractDialect {
                 def properties = allColumns
 
 
-                if (insertUpdatedColumnsOnly == true || (insertUpdatedColumnsOnly == null && instance.dynamicProperties)) {
+                if (insertUpdatedColumnsOnly == true || (insertUpdatedColumnsOnly == null && instance?.dynamicProperties)) {
                         properties = instance.dynamicProperties
                         instance?.primaryKey?.each {
                                 if (!properties.contains(it)) {
