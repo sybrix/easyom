@@ -1,6 +1,5 @@
 package sybrix.easyom
 
-import com.mysql.cj.jdbc.MysqlDataSource
 import groovy.sql.Sql
 import groovy.util.logging.Slf4j
 import sybrix.easyom.dialects.Dialect
@@ -884,7 +883,6 @@ class EasyOM {
 
                                 return Sql.newInstance(url, username, pwd, driver);
                         }
-new MysqlDataSource().setU
                 } catch (Exception e) {
                         throw new RuntimeException("newSqlInstance() failed. Make sure app['database.*]' properties are set and correct." + e.getMessage(), e);
                 }

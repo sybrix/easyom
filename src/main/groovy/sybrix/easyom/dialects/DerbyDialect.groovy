@@ -1,6 +1,5 @@
 package sybrix.easyom.dialects
 
-import com.mysql.cj.jdbc.MysqlDataSource
 import org.codehaus.groovy.runtime.GStringImpl
 import sybrix.easyom.SqlStatement
 
