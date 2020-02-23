@@ -364,7 +364,9 @@ abstract class AbstractDialect implements Dialect {
 
                 if (isProperty(clazz, 'tableName')) {
                         def metaProperty = clazz.metaClass.getMetaProperty('tableName')
-                        if (metaProperty instanceof ThreadManagedMetaBeanProperty) return metaProperty.initialValue else
+                        if (metaProperty instanceof ThreadManagedMetaBeanProperty)
+                                return metaProperty.initialValue
+                        else
                                 return metaProperty.getProperty('tableName')
                 } else {
                         if (clazz.name.lastIndexOf('.') > -1) {

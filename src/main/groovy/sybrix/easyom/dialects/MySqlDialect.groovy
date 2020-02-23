@@ -1,13 +1,12 @@
 package sybrix.easyom.dialects
 
-import com.mysql.cj.jdbc.MysqlDataSource
 import org.codehaus.groovy.runtime.GStringImpl
 import sybrix.easyom.SqlStatement
 
 import java.sql.Blob
 import java.sql.Connection
 
-class DerbyDialect extends AbstractDialect {
+class MySqlDialect extends AbstractDialect {
         @Override
         String createPagingAfterSelect(Integer page, Integer pageSize) {
                 return ""
@@ -196,7 +195,7 @@ class DerbyDialect extends AbstractDialect {
                 //offset ? rows fetch first ? rows only
 
                 def skip = getSkip(pageSize, page)
-                return sql.plus(" OFFSET ${skip} rows fetch first $pageSize rows only")
+                return sql.plus(" LIMIT $pageSize OFFSET ${skip} ")
 
         }
 

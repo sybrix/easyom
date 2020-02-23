@@ -1,5 +1,6 @@
 package sybrix.easyom
 
+import com.mysql.cj.jdbc.MysqlDataSource
 import groovy.sql.Sql
 import groovy.util.logging.Slf4j
 import sybrix.easyom.dialects.Dialect
@@ -183,7 +184,7 @@ class EasyOM {
                         if (page != null && pageSize != null) {
                                 totalCountQuery = dbDialect.createRecordCountStringQuery(sql)
                                 pagedResults = doPagedResults(sql, totalCountQuery, page, pageSize, null)
-                                sql = pagedResults.sql
+                                sql =  pagedResults.sql
                         }
 
                         log.debug delegate.toString()
@@ -342,7 +343,7 @@ class EasyOM {
                 if (p instanceof java.sql.Blob) {
                         new sybrix.easyom.Blob(p)
                 } else {
-                        p
+                                p
                 }
         }
 
@@ -360,10 +361,11 @@ class EasyOM {
                         }
                         def l = db.executeInsert(sqlStatement.sqlGString)
 
-                        def id = l[0][0]
+                        if (l.size()>0) {
+                                def id = l[0][0]
 
-                        id
-
+                                return id
+                        }
                 }
         }
 
@@ -767,12 +769,22 @@ class EasyOM {
 
 
         PagedResults doPagedResults(def sql, String totalCountQuery, Integer page, Integer pageSize, def parameterValues) {
+
+//                WhereClauseParameters whereClauseParameters = createParameters(parameters)
+//
+//                SelectSqlStatement sqlStatement = dbDialect.createSelectStatement(clazz, whereClauseParameters)
+//
+//                if (sqlStatement.countStatement)
+//                        doPageSelect(whereClauseParameters.getPageSize(), whereClauseParameters.getPage(), sqlStatement, clazz)
+//                else
+//                        doSelect(sqlStatement, clazz)
+//
                 def newSQL = dbDialect.createPagingStringQuery(sql, page, pageSize)
                 log.debug("countQuery parameters: ${parameterValues}")
                 PagedResults pagedResults = new PagedResults()
 
                 pagedResults.recordCount = totalCountQuery.executeScalar(parameterValues)
-                pagedResults.pageCount = (int) Math.ceil(totalCount / pageSize)
+                pagedResults.pageCount = (int) Math.ceil(pagedResults.recordCount/pageSize)
                 pagedResults.page = page
 
                 log.debug """doPagingQuery: $newSQL
@@ -782,6 +794,7 @@ class EasyOM {
 
                 //[recordCount: totalCount, 'sql': newSQL, pageCount: pageCount, page: page]
 
+                pagedResults.sql = newSQL
                 pagedResults
         }
 
@@ -871,7 +884,7 @@ class EasyOM {
 
                                 return Sql.newInstance(url, username, pwd, driver);
                         }
-
+new MysqlDataSource().setU
                 } catch (Exception e) {
                         throw new RuntimeException("newSqlInstance() failed. Make sure app['database.*]' properties are set and correct." + e.getMessage(), e);
                 }

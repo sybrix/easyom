@@ -30,7 +30,7 @@ class Blob {
                 if (data != null) {
                         return new ByteArrayInputStream(data)
                 } else if (file != null) {
-                        return new FileInputStream(file)
+                                  return new FileInputStream(file)
                 } else {
                         return inputStream
                 }

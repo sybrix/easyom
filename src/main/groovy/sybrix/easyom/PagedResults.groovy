@@ -7,5 +7,5 @@ class PagedResults {
         Integer recordCount
         List data
 
-        String sql
+        GString sql
 }
